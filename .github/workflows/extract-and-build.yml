@@ -1,0 +1,99 @@
+name: 解压源码并构建 APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_name:
+        description: '要解压的 zip 文件名（留空则自动找根目录第一个 .zip）'
+        required: false
+        default: ''
+  push:
+    paths:
+      - '*.zip'
+      - '.github/workflows/*.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 定位 zip 文件
+        id: zip
+        run: |
+          ZIP=""
+          if [ -n "${{ inputs.zip_name }}" ]; then
+            ZIP="${{ inputs.zip_name }}"
+          else
+            ZIP=$(find . -maxdepth 1 -name '*.zip' -type f | head -n 1)
+          fi
+          if [ -n "$ZIP" ] && [ ! -f "$ZIP" ]; then
+            echo "找不到指定的 zip：$ZIP"; exit 1
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "zip 文件：${ZIP:-（无，直接用仓库源码构建）}"
+
+      - name: 解压到代码区
+        if: steps.zip.outputs.zip != ''
+        run: |
+          command -v unzip >/dev/null || (sudo apt-get update && sudo apt-get install -y unzip)
+          ZIP="${{ steps.zip.outputs.zip }}"
+          rm -rf /tmp/extracted && mkdir -p /tmp/extracted
+          unzip -o "$ZIP" -d /tmp/extracted
+          PROJ=$(dirname "$(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
+          if [ -z "$PROJ" ]; then echo "zip 里没有找到 package.json"; exit 1; fi
+          echo "项目目录：$PROJ"
+          cp -rT "$PROJ" .
+          rm -rf node_modules dist android ios
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web
+        run: npm run build
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build APK
+        working-directory: android
+        run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: talent-cert-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: 提交解压源码并删除 zip
+        if: success() && steps.zip.outputs.zip != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -f "${{ steps.zip.outputs.zip }}"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "没有需要提交的改动"
+          else
+            git commit -m "解压源码并删除 zip（构建成功）"
+            git push origin HEAD:"$GITHUB_REF_NAME"
+          fi
