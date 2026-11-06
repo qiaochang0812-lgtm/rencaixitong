@@ -26,6 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -43,7 +44,8 @@ jobs:
             ZIP=$(find . -maxdepth 1 -name '*.zip' -type f | head -n 1)
           fi
           if [ -n "$ZIP" ] && [ ! -f "$ZIP" ]; then
-            echo "找不到指定的 zip：$ZIP"; exit 1
+            echo "找不到指定的 zip：$ZIP"
+            exit 1
           fi
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "zip 文件：${ZIP:-（无，直接用仓库源码构建）}"
@@ -53,16 +55,23 @@ jobs:
         run: |
           command -v unzip >/dev/null || (sudo apt-get update && sudo apt-get install -y unzip)
           ZIP="${{ steps.zip.outputs.zip }}"
-          rm -rf /tmp/extracted && mkdir -p /tmp/extracted
-          unzip -o "$ZIP" -d /tmp/extracted
-          PROJ=$(dirname "$(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
-          if [ -z "$PROJ" ]; then echo "zip 里没有找到 package.json"; exit 1; fi
+          rm -rf /tmp/extracted
+          mkdir -p /tmp/extracted
+          # 优先尝试 UTF-8，失败再回退（兼容 Windows 反斜杠路径）
+          unzip -o -O UTF-8 "$ZIP" -d /tmp/extracted 2>/dev/null || unzip -o "$ZIP" -d /tmp/extracted
+          PROJ=\( (dirname " \)(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
+          if [ -z "$PROJ" ] || [ ! -f "$PROJ/package.json" ]; then
+            echo "zip 里没有找到有效的 package.json"
+            exit 1
+          fi
           echo "项目目录：$PROJ"
+          # 覆盖到当前工作区（保留 .git）
           cp -rT "$PROJ" .
-          rm -rf node_modules dist android ios
+          # 清理可能残留的构建产物与依赖
+          rm -rf node_modules dist android ios .capacitor
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Build web
         run: npm run build
@@ -75,7 +84,9 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -83,6 +94,7 @@ jobs:
           name: talent-cert-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
 
       - name: 提交解压源码并删除 zip
         if: success() && steps.zip.outputs.zip != ''
@@ -90,10 +102,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f "${{ steps.zip.outputs.zip }}"
+          # 清理临时/构建目录，避免提交进去
+          rm -rf node_modules dist android ios .capacitor
           git add -A
           if git diff --cached --quiet; then
             echo "没有需要提交的改动"
           else
-            git commit -m "解压源码并删除 zip（构建成功）"
+            git commit -m "chore: 解压源码并删除 zip（构建成功）"
             git push origin HEAD:"$GITHUB_REF_NAME"
           fi
