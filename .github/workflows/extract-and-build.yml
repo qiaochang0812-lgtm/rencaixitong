@@ -26,7 +26,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -59,7 +58,7 @@ jobs:
           mkdir -p /tmp/extracted
           # 优先尝试 UTF-8，失败再回退（兼容 Windows 反斜杠路径）
           unzip -o -O UTF-8 "$ZIP" -d /tmp/extracted 2>/dev/null || unzip -o "$ZIP" -d /tmp/extracted
-          PROJ=\( (dirname " \)(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
+          PROJ=$(dirname "$(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
           if [ -z "$PROJ" ] || [ ! -f "$PROJ/package.json" ]; then
             echo "zip 里没有找到有效的 package.json"
             exit 1
