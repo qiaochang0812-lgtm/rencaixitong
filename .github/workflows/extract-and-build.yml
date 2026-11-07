@@ -128,7 +128,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f -- "$ZIP"
-          git add -A -- . ':!node_modules' ':!dist' ':!android' ':!ios'
+          # 确保构建产物目录被忽略（不能在 git add 里用 ':!路径' 排除已被忽略的目录，会报错退出）
+          touch .gitignore
+          for P in node_modules dist android ios; do
+            grep -qxE "/?$P/?" .gitignore || echo "$P/" >> .gitignore
+          done
+          git add -A
           if git diff --cached --quiet; then
             echo "没有需要提交的改动"
           else
