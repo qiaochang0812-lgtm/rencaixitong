@@ -10,14 +10,18 @@ on:
   push:
     paths:
       - '*.zip'
-      - '.github/workflows/*.yml'
 
 permissions:
   contents: write
 
+concurrency:
+  group: extract-and-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,42 +39,57 @@ jobs:
 
       - name: 定位 zip 文件
         id: zip
+        env:
+          INPUT_ZIP: ${{ inputs.zip_name }}
         run: |
           ZIP=""
-          if [ -n "${{ inputs.zip_name }}" ]; then
-            ZIP="${{ inputs.zip_name }}"
+          if [ -n "$INPUT_ZIP" ]; then
+            ZIP="$INPUT_ZIP"
           else
             ZIP=$(find . -maxdepth 1 -name '*.zip' -type f | head -n 1)
           fi
+          ZIP="${ZIP#./}"
           if [ -n "$ZIP" ] && [ ! -f "$ZIP" ]; then
-            echo "找不到指定的 zip：$ZIP"
-            exit 1
+            echo "::error::找不到指定的 zip：$ZIP"; exit 1
           fi
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "zip 文件：${ZIP:-（无，直接用仓库源码构建）}"
 
       - name: 解压到代码区
         if: steps.zip.outputs.zip != ''
+        env:
+          ZIP: ${{ steps.zip.outputs.zip }}
         run: |
-          command -v unzip >/dev/null || (sudo apt-get update && sudo apt-get install -y unzip)
-          ZIP="${{ steps.zip.outputs.zip }}"
-          rm -rf /tmp/extracted
-          mkdir -p /tmp/extracted
-          # 优先尝试 UTF-8，失败再回退（兼容 Windows 反斜杠路径）
-          unzip -o -O UTF-8 "$ZIP" -d /tmp/extracted 2>/dev/null || unzip -o "$ZIP" -d /tmp/extracted
-          PROJ=$(dirname "$(find /tmp/extracted -name package.json -not -path '*/node_modules/*' | head -n 1)")
-          if [ -z "$PROJ" ] || [ ! -f "$PROJ/package.json" ]; then
-            echo "zip 里没有找到有效的 package.json"
-            exit 1
+          rm -rf /tmp/extracted && mkdir -p /tmp/extracted
+
+          # Windows 打的 zip 路径用反斜杠，unzip 会转换但返回码为 1（仅警告），
+          # 默认 bash -e 会把它当失败，所以 0 和 1 都视为成功，>=2 才是真错误
+          set +e
+          unzip -q -o "$ZIP" -d /tmp/extracted
+          RC=$?
+          set -e
+          if [ "$RC" -gt 1 ]; then
+            echo "::error::解压失败（unzip 退出码 $RC）"; exit 1
           fi
+
+          # 取路径最短的 package.json 作为项目根（兼容 zip 外面多套一层目录）
+          PKG=$(find /tmp/extracted -name package.json -not -path '*/node_modules/*' \
+                | awk '{print length($0) "\t" $0}' | sort -n | head -n 1 | cut -f2-)
+          if [ -z "$PKG" ]; then
+            echo "::error::zip 里没有找到 package.json"; exit 1
+          fi
+          PROJ=$(dirname "$PKG")
           echo "项目目录：$PROJ"
-          # 覆盖到当前工作区（保留 .git）
+
+          # 不用 zip 里的 workflow 覆盖本仓库的 workflow
+          # （GITHUB_TOKEN 无权推送 .github/workflows 的改动，会导致最后一步 push 失败）
+          rm -rf "$PROJ/.github"
+
           cp -rT "$PROJ" .
-          # 清理可能残留的构建产物与依赖
-          rm -rf node_modules dist android ios .capacitor
+          rm -rf node_modules dist android ios
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install
 
       - name: Build web
         run: npm run build
@@ -78,14 +97,21 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
+      - name: 补全通知相关权限
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          for P in POST_NOTIFICATIONS SCHEDULE_EXACT_ALARM RECEIVE_BOOT_COMPLETED VIBRATE; do
+            if ! grep -q "android.permission.$P" "$MANIFEST"; then
+              sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$P\" />\n</manifest>#" "$MANIFEST"
+            fi
+          done
+
       - name: Sync Capacitor
         run: npx cap sync android
 
       - name: Build APK
         working-directory: android
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+        run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -93,20 +119,20 @@ jobs:
           name: talent-cert-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
 
       - name: 提交解压源码并删除 zip
         if: success() && steps.zip.outputs.zip != ''
+        env:
+          ZIP: ${{ steps.zip.outputs.zip }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -f "${{ steps.zip.outputs.zip }}"
-          # 清理临时/构建目录，避免提交进去
-          rm -rf node_modules dist android ios .capacitor
-          git add -A
+          rm -f -- "$ZIP"
+          git add -A -- . ':!node_modules' ':!dist' ':!android' ':!ios'
           if git diff --cached --quiet; then
             echo "没有需要提交的改动"
           else
-            git commit -m "chore: 解压源码并删除 zip（构建成功）"
+            git commit -m "解压源码并删除 zip（构建成功）"
+            git pull --rebase origin "$GITHUB_REF_NAME"
             git push origin HEAD:"$GITHUB_REF_NAME"
           fi
