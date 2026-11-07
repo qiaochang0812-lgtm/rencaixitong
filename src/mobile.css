@@ -1,0 +1,23 @@
+/* 移动端补充：仅在窄屏下叠加安卓全面屏安全区与触控优化，桌面端不受影响。 */
+@media (max-width: 760px) {
+  .sidebar {
+    padding-left: max(11px, env(safe-area-inset-left));
+    padding-right: max(11px, env(safe-area-inset-right));
+    padding-top: max(9px, env(safe-area-inset-top));
+  }
+
+  .main-content {
+    padding-left: max(13px, env(safe-area-inset-left));
+    padding-right: max(13px, env(safe-area-inset-right));
+    padding-bottom: max(25px, calc(env(safe-area-inset-bottom) + 16px));
+  }
+}
+
+button,
+.button,
+.nav-item,
+.text-button,
+.row-button,
+.mini-button {
+  -webkit-tap-highlight-color: transparent;
+}
