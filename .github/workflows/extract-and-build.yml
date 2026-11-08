@@ -109,9 +109,38 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: 缓存 Gradle 发行包
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-${{ runner.os }}-bin-v1
+
+      - name: 加固 Gradle 下载（加长超时、改用精简包）
+        working-directory: android
+        run: |
+          F=gradle/wrapper/gradle-wrapper.properties
+          # 默认下载超时只有 10 秒，runner 网络稍慢就会失败
+          if grep -q '^networkTimeout=' "$F"; then
+            sed -i 's/^networkTimeout=.*/networkTimeout=180000/' "$F"
+          else
+            echo "networkTimeout=180000" >> "$F"
+          fi
+          # -all 包带源码和文档（约 200MB），-bin 够用且更小
+          sed -i 's/-all\.zip/-bin.zip/' "$F"
+          cat "$F"
+
       - name: Build APK
         working-directory: android
-        run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
+        run: |
+          chmod +x ./gradlew
+          for i in 1 2 3; do
+            if ./gradlew assembleDebug --no-daemon; then
+              exit 0
+            fi
+            echo "::warning::第 $i 次构建失败，15 秒后重试（多为网络下载超时）"
+            sleep 15
+          done
+          exit 1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
