@@ -157,6 +157,43 @@ jobs:
           fi
           cat "$F"
 
+      - name: 配置固定签名与版本号
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          KS="$GITHUB_WORKSPACE/signing/talent-cert.keystore"
+          PROP="$GITHUB_WORKSPACE/signing/keystore.properties"
+          if [ ! -f "$KS" ] || [ ! -f "$PROP" ]; then
+            echo "::error::缺少 signing/talent-cert.keystore 或 signing/keystore.properties，请把 signing 目录一并上传"
+            exit 1
+          fi
+          G=android/app/build.gradle
+
+          # 每次构建用同一把签名，覆盖安装不再提示“签名不一致”
+          if ! grep -q 'talent-cert.keystore' "$G"; then
+            cat >> "$G" <<'EOF'
+
+          // ---- 固定签名（由工作流追加） ----
+          def ksProps = new Properties()
+          file("$rootDir/../signing/keystore.properties").withInputStream { ksProps.load(it) }
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file("$rootDir/../signing/talent-cert.keystore")
+                      storePassword ksProps['storePassword']
+                      keyAlias ksProps['keyAlias']
+                      keyPassword ksProps['keyPassword']
+                      storeType 'pkcs12'
+                  }
+              }
+          }
+          EOF
+          fi
+
+          # 版本号随构建递增，避免被系统当成“降级”拒绝安装
+          sed -i "s/versionCode [0-9][0-9]*/versionCode $RUN_NUMBER/; s/versionName \"[^\"]*\"/versionName \"1.0.$RUN_NUMBER\"/" "$G"
+          grep -n "versionCode\|versionName" "$G"
+
       - name: Build APK
         working-directory: android
         run: |
