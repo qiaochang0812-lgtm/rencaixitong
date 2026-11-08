@@ -223,6 +223,12 @@ export function initBridge() {
     if (state.isActive) void scheduleReminders();
   });
 
+  // 安卓返回键：先关弹层 → 再回首页 → 最后才退出应用
+  void App.addListener('backButton', () => {
+    if (window.__handleBack?.()) return;
+    void App.exitApp();
+  });
+
   // 台账每次保存后重排
   window.addEventListener('talent:changed', () => void scheduleReminders());
 }

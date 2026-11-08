@@ -1,14 +1,15 @@
 'use strict';
 
+import { decryptLegacyPhones } from './legacy-migrate.js';
+
 /* =========================================================
    人才证书与业绩管理系统
-   零依赖离线版：数据保存在当前浏览器，本文件不连接外部服务。
+   手机 App 版：数据保存在本机，不连接任何外部服务。
    ========================================================= */
 
 const STORAGE_KEY = 'talentCertificateSystem.v2';
 const DATA_VERSION = 2;
-const LOG_GENESIS = 'GENESIS';
-const SESSION_REVEAL_MS = 30000;
+const MAX_LOGS = 1000;
 const DEFAULT_ALERT_DAYS = 30;
 const DEFAULT_CERT_TYPES = [
   '二级机电带B',
@@ -28,8 +29,9 @@ const DEFAULT_CERT_TYPES = [
 ];
 
 const PAGE_META = {
-  dashboard: { eyebrow: '业务总览', title: '首页看板', subtitle: '合同、回款、业绩进度与到期预警实时看板' },
-  ledger: { eyebrow: '数据台账', title: '详细台账', subtitle: '维护人才、证书、价格与负责人信息' }
+  dashboard: { title: '首页', subtitle: '合同、回款、业绩与到期预警' },
+  ledger: { title: '台账', subtitle: '人才、证书、价格与负责人信息' },
+  settings: { title: '设置', subtitle: '预警规则、数据备份与操作日志' }
 };
 
 const HEADER_ALIASES = {
@@ -57,9 +59,7 @@ const state = {
   records: [],
   settings: {},
   logs: [],
-  vault: null,
-  sessionKey: null,
-  lastAuthAt: 0,
+  legacyVault: null,
   activePage: 'dashboard',
   filters: {
     search: '',
@@ -72,9 +72,8 @@ const state = {
   },
   page: 1,
   pageSize: 20,
-  revealedPhones: new Map(),
-  modal: null,
-  authResolver: null
+  logLimit: 30,
+  modal: null
 };
 
 /* ---------------- 通用工具 ---------------- */
@@ -242,131 +241,12 @@ function isMaskedPhone(value) {
   return /[*＊•]/.test(String(value || ''));
 }
 
-function maskPhone() {
-  return '•••••••';
-}
-
 function debounce(fn, wait = 220) {
   let timer = null;
   return (...args) => {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), wait);
   };
-}
-
-function stableStringify(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
-}
-
-/* ---------------- 加密与安全 ---------------- */
-
-function bytesToBase64(bytes) {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function ensureWebCrypto() {
-  if (!globalThis.crypto?.subtle) {
-    throw new Error('当前浏览器未启用 Web Crypto。请使用“启动系统.bat”通过 localhost 打开，或改用最新版 Edge/Chrome。');
-  }
-}
-
-async function deriveKey(password, saltBase64, iterations) {
-  ensureWebCrypto();
-  const encoder = new TextEncoder();
-  const sourceKey = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: base64ToBytes(saltBase64), iterations, hash: 'SHA-256' },
-    sourceKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptText(key, text) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(String(text));
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-  return { iv: bytesToBase64(iv), data: bytesToBase64(new Uint8Array(encrypted)) };
-}
-
-async function decryptText(key, payload) {
-  if (!payload?.iv || !payload?.data) throw new Error('加密数据不完整');
-  const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBytes(payload.iv) },
-    key,
-    base64ToBytes(payload.data)
-  );
-  return new TextDecoder().decode(plain);
-}
-
-async function createVault(password) {
-  ensureWebCrypto();
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const saltBase64 = bytesToBase64(salt);
-  const iterations = 210000;
-  const key = await deriveKey(password, saltBase64, iterations);
-  const verifier = await encryptText(key, 'TALENT_CERT_VAULT_OK');
-  state.vault = {
-    version: 1,
-    salt: saltBase64,
-    iterations,
-    verifier,
-    createdAt: nowText(),
-    updatedAt: nowText()
-  };
-  state.sessionKey = key;
-  state.lastAuthAt = Date.now();
-}
-
-async function unlockVault(password) {
-  if (!state.vault) return false;
-  try {
-    const key = await deriveKey(password, state.vault.salt, state.vault.iterations);
-    const text = await decryptText(key, state.vault.verifier);
-    if (text !== 'TALENT_CERT_VAULT_OK') return false;
-    state.sessionKey = key;
-    state.lastAuthAt = Date.now();
-    return true;
-  } catch {
-    state.sessionKey = null;
-    return false;
-  }
-}
-
-async function encryptPhoneValue(phone) {
-  const normalized = normalizePhone(phone);
-  if (!normalized) return { phoneCipher: '', phoneIv: '' };
-  if (!state.sessionKey) throw new Error('安全会话尚未解锁');
-  const payload = await encryptText(state.sessionKey, normalized);
-  return { phoneCipher: payload.data, phoneIv: payload.iv };
-}
-
-async function decryptPhoneValue(record) {
-  if (!record?.phoneCipher || !record?.phoneIv) return '';
-  if (!state.sessionKey) throw new Error('安全会话尚未解锁');
-  return decryptText(state.sessionKey, { data: record.phoneCipher, iv: record.phoneIv });
 }
 
 /* ---------------- 数据持久化 ---------------- */
@@ -396,6 +276,8 @@ function normalizeRecord(record = {}) {
     sourceRow: record.sourceRow || null,
     adjustmentDate,
     name: String(record.name || '').trim(),
+    phone: normalizePhone(record.phone || ''),
+    // 以下两项仅用于旧版加密手机号的一次性迁移，迁移完成后为空
     phoneCipher: String(record.phoneCipher || ''),
     phoneIv: String(record.phoneIv || ''),
     departmentPersonal: String(record.departmentPersonal || '').trim(),
@@ -437,48 +319,28 @@ function saveState() {
       records: state.records,
       settings: state.settings,
       logs: state.logs,
-      vault: state.vault
+      vault: state.legacyVault
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     window.dispatchEvent(new CustomEvent('talent:changed'));
   } catch (error) {
     console.error(error);
-    showToast('本地保存失败，请检查浏览器存储空间。', 'error');
+    showToast('本地保存失败，请检查手机存储空间。', 'error');
   }
 }
 
-async function logHash(baseEntry) {
-  ensureWebCrypto();
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stableStringify(baseEntry)));
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function appendLog(action, recordId = '', details = '') {
-  const previous = state.logs.length ? state.logs[state.logs.length - 1].hash : LOG_GENESIS;
-  const base = {
+function appendLog(action, recordId = '', details = '') {
+  const entry = {
     id: `log-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     timestamp: nowText(),
     operator: '本地管理员',
     action,
     recordId: recordId || '',
-    details: typeof details === 'string' ? details : deepClone(details),
-    prevHash: previous
+    details: typeof details === 'string' ? details : deepClone(details)
   };
-  const entry = { ...base, hash: await logHash(base) };
   state.logs.push(entry);
+  if (state.logs.length > MAX_LOGS) state.logs.splice(0, state.logs.length - MAX_LOGS);
   return entry;
-}
-
-async function verifyLogChain() {
-  let previous = LOG_GENESIS;
-  for (const entry of state.logs) {
-    if (entry.prevHash !== previous) return { ok: false, brokenAt: entry.id || previous };
-    const { hash, ...base } = entry;
-    const expected = await logHash(base);
-    if (hash !== expected) return { ok: false, brokenAt: entry.id || previous };
-    previous = hash;
-  }
-  return { ok: true };
 }
 
 async function loadState() {
@@ -520,8 +382,9 @@ async function loadState() {
     state.settings = { ...defaultSettings(), ...(parsed.settings || {}) };
     state.settings.monthlyPlans = { ...(parsed.settings?.monthlyPlans || {}) };
     delete state.settings.performanceFactor;
-    state.logs = Array.isArray(parsed.logs) ? parsed.logs : [];
-    state.vault = parsed.vault || null;
+    state.logs = Array.isArray(parsed.logs) ? parsed.logs.map(({ prevHash, hash, ...entry }) => entry) : [];
+    state.legacyVault = parsed.vault || null;
+    if (!hasLegacyPhones()) state.legacyVault = null;
     ensureSettingsOptions();
     saveState();
     return;
@@ -531,11 +394,11 @@ async function loadState() {
   state.records = Array.isArray(seed.records) ? seed.records.map(normalizeRecord) : [];
   state.settings = defaultSettings();
   state.logs = [];
-  state.vault = null;
+  state.legacyVault = null;
   ensureSettingsOptions();
-  await appendLog('系统初始化', '', '创建本地加密台账数据库');
+  appendLog('系统初始化', '', '创建本地台账数据库');
   if (state.records.length) {
-    await appendLog('历史数据导入', '', `从 ${seed.sourceFile || '原有 Excel'} 初始化 ${state.records.length} 条记录`);
+    appendLog('历史数据导入', '', `从 ${seed.sourceFile || '原有 Excel'} 初始化 ${state.records.length} 条记录`);
   }
   saveState();
 }
@@ -606,15 +469,15 @@ function remainingCell(days, kind = 'general') {
 }
 
 function phoneCell(record) {
-  if (!record.phoneCipher) return '<span class="muted">未录入</span>';
-  const revealed = state.revealedPhones.get(record.id);
-  if (revealed && revealed.until > Date.now()) {
-    return `<span class="phone-visible">${escapeHtml(revealed.value)}</span>
-      <button class="row-button" data-action="hide-phone" data-record-id="${escapeHtml(record.id)}">隐藏</button>`;
+  if (record.phone) {
+    return `<a class="phone-link" href="tel:${escapeHtml(record.phone)}">${escapeHtml(record.phone)}</a>`;
   }
-  return `<button class="phone-hidden" data-action="reveal-phone" data-record-id="${escapeHtml(record.id)}" title="验证后查看手机号">
-    <span>${maskPhone()}</span><span>查看</span>
-  </button>`;
+  if (record.phoneCipher) return '<span class="muted">旧版加密（待迁移）</span>';
+  return '<span class="muted">未录入</span>';
+}
+
+function hasLegacyPhones() {
+  return Boolean(state.legacyVault) && state.records.some((record) => record.phoneCipher && !record.phone);
 }
 
 /* ---------------- 页面渲染 ---------------- */
@@ -623,15 +486,14 @@ function renderAll() {
   renderPageChrome();
   renderDashboard();
   renderLedger();
-  renderSecurityStatus();
+  renderSettings();
 }
 
 function renderPageChrome() {
   const meta = PAGE_META[state.activePage] || PAGE_META.dashboard;
-  $('#page-eyebrow').textContent = meta.eyebrow;
   $('#page-title').textContent = meta.title;
   $('#page-subtitle').textContent = meta.subtitle;
-  $$('.nav-item[data-page]').forEach((button) => {
+  $$('.tab-item[data-page]').forEach((button) => {
     button.classList.toggle('active', button.dataset.page === state.activePage);
   });
   $$('.page').forEach((page) => {
@@ -639,19 +501,30 @@ function renderPageChrome() {
   });
 }
 
-function renderSecurityStatus() {
-  const dot = $('#security-dot');
-  const label = $('#security-label');
-  if (!state.vault) {
-    dot.classList.remove('ready');
-    label.textContent = '安全中心未初始化';
-  } else if (state.sessionKey) {
-    dot.classList.add('ready');
-    label.textContent = '安全会话已解锁';
-  } else {
-    dot.classList.remove('ready');
-    label.textContent = '安全会话已锁定';
-  }
+function renderSettings() {
+  const setValue = (element, value) => {
+    if (element && document.activeElement !== element) element.value = value;
+  };
+  setValue($('#settings-alert-days'), state.settings.alertDays ?? DEFAULT_ALERT_DAYS);
+  setValue($('#settings-cert-types'), (state.settings.certificateTypes || []).join('\n'));
+  setValue($('#settings-owners'), (state.settings.owners || []).join('\n'));
+  $('#legacy-row').hidden = !hasLegacyPhones();
+  renderLogs();
+}
+
+function renderLogs() {
+  const entries = [...state.logs].reverse();
+  const shown = entries.slice(0, state.logLimit);
+  $('#log-summary').textContent = `共 ${state.logs.length} 条，按时间倒序显示（最多保留 ${MAX_LOGS} 条）`;
+  $('#log-list').innerHTML = shown.length
+    ? shown.map((entry) => `
+      <div class="log-item">
+        <span class="log-time">${escapeHtml(entry.timestamp)}</span>
+        <span class="log-action">${escapeHtml(entry.action)}</span>
+        <span class="log-detail">${escapeHtml(typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details))}${entry.recordId ? ` · 记录 ${escapeHtml(entry.recordId)}` : ''}</span>
+      </div>`).join('')
+    : '<div class="empty-state">暂无操作日志</div>';
+  $('#log-more').hidden = entries.length <= shown.length;
 }
 
 function renderDashboard() {
@@ -837,57 +710,71 @@ function renderLedger() {
   state.page = Math.min(Math.max(1, state.page), totalPages);
   const start = (state.page - 1) * state.pageSize;
   const pageRecords = records.slice(start, start + state.pageSize);
-  const tbody = $('#ledger-table-body');
 
   $('#ledger-count').textContent = state.filters.focusId
     ? `定位结果：${total} 条`
-    : `共 ${total} 条 · 当前第 ${state.page}/${totalPages} 页`;
-  $('#ledger-formula-note').textContent = '业绩 =（出证价 - 收证价）× 业绩系数（人才部与企业部相同为 1，不同为 0.5）';
+    : `共 ${total} 条 · 第 ${state.page}/${totalPages} 页`;
 
-  if (!pageRecords.length) {
-    tbody.innerHTML = `<tr><td colspan="23"><div class="empty-state"><div><span class="empty-icon">⌕</span>没有符合筛选条件的记录</div></div></td></tr>`;
-  } else {
-    tbody.innerHTML = pageRecords.map(renderLedgerRow).join('');
-  }
+  $('#ledger-list').innerHTML = pageRecords.length
+    ? pageRecords.map(renderRecordCard).join('')
+    : '<div class="empty-state"><div><span class="empty-icon">⌕</span>没有符合筛选条件的记录</div></div>';
   renderPagination(totalPages);
   renderFocusBanner();
 }
 
-function renderLedgerRow(record) {
+function renderRecordCard(record) {
   const status = recordStatus(record);
   const contractDays = contractRemainingDays(record);
   const regDays = remainingDays(record.regExpiryDate);
   const threeDays = remainingDays(record.threeExpiryDate);
   const deleted = Boolean(record.deletedAt);
-  const actionButtons = deleted
-    ? `<button class="row-button" data-action="restore-record" data-record-id="${escapeHtml(record.id)}">恢复</button>`
-    : `<button class="row-button" data-action="edit-record" data-record-id="${escapeHtml(record.id)}">编辑</button>
-       <button class="row-button danger" data-action="delete-record" data-record-id="${escapeHtml(record.id)}">删除</button>`;
-  return `<tr id="row-${escapeHtml(record.id)}" class="${deleted ? 'deleted' : ''}">
-    <td>${escapeHtml(formatDisplayDate(record.adjustmentDate))}</td>
-    <td class="name-cell"><strong>${escapeHtml(record.name || '未命名')}</strong>${record.sourceRow ? `<span>原表第 ${escapeHtml(record.sourceRow)} 行</span>` : ''}</td>
-    <td class="phone-cell">${phoneCell(record)}</td>
-    <td>${escapeHtml(record.departmentPersonal || '—')}</td>
-    <td>${escapeHtml(record.departmentEnterprise || '—')}</td>
-    <td>${escapeHtml(record.certificateType || '—')}</td>
-    <td class="number-cell money-cell">${escapeHtml(formatMoney(record.receivePrice))}</td>
-    <td class="number-cell money-cell">${escapeHtml(formatMoney(record.issuePrice))}</td>
-    <td class="number-cell money-cell">${escapeHtml(formatMoney(record.paymentAmount))}</td>
-    <td>${escapeHtml(formatDisplayDate(record.paymentDate))}</td>
-    <td class="number-cell money-cell" title="业绩系数 ×${performanceFactor(record)}">${escapeHtml(formatMoney(businessValue(record)))}</td>
-    <td>${escapeHtml(formatDisplayDate(record.registrationDate))}</td>
-    <td class="number-cell">${record.contractMonths ? `${escapeHtml(record.contractMonths)} 个月` : '—'}</td>
-    <td>${escapeHtml(formatDisplayDate(computeContractExpiry(record)))}</td>
-    <td class="number-cell">${remainingCell(contractDays, 'contract')}</td>
-    <td>${escapeHtml(formatDisplayDate(record.regExpiryDate))}</td>
-    <td class="number-cell">${remainingCell(regDays, 'registration')}</td>
-    <td>${escapeHtml(formatDisplayDate(record.threeExpiryDate))}</td>
-    <td class="number-cell">${remainingCell(threeDays, 'three')}</td>
-    <td><span class="record-status ${status.key}">${escapeHtml(status.label)}</span></td>
-    <td>${escapeHtml(record.owner || '未指定')}</td>
-    <td class="remark-cell" title="${escapeHtml(record.remarks || '')}">${escapeHtml(record.remarks || '—')}</td>
-    <td class="actions-cell"><div class="row-actions">${actionButtons}</div></td>
-  </tr>`;
+  const id = escapeHtml(record.id);
+  const call = record.phone
+    ? `<a class="row-button primary" href="tel:${escapeHtml(record.phone)}">拨号</a>`
+    : '';
+  const actions = deleted
+    ? `<button class="row-button" data-action="restore-record" data-record-id="${id}">恢复</button>`
+    : `${call}<button class="row-button" data-action="edit-record" data-record-id="${id}">编辑</button>
+       <button class="row-button danger" data-action="delete-record" data-record-id="${id}">删除</button>`;
+  const sub = [formatDisplayDate(record.adjustmentDate), record.owner || '未指定负责人'].join(' · ');
+  const focused = record.id === state.filters.focusId;
+  return `<article id="row-${id}" class="record-card${deleted ? ' deleted' : ''}${focused ? ' focused' : ''}">
+    <div class="record-head">
+      <div>
+        <strong class="record-name">${escapeHtml(record.name || '未命名')}</strong>
+        <span class="record-sub">${escapeHtml(sub)}</span>
+      </div>
+      <span class="record-status ${status.key}">${escapeHtml(status.label)}</span>
+    </div>
+    <div class="record-cert">${escapeHtml(record.certificateType || '未填写证书类型')}</div>
+    <div class="record-money">
+      <div><span>出证价</span><strong>${escapeHtml(formatMoney(record.issuePrice))}</strong></div>
+      <div><span>回款</span><strong>${escapeHtml(formatMoney(record.paymentAmount))}</strong></div>
+      <div title="业绩系数 ×${performanceFactor(record)}"><span>业绩</span><strong>${escapeHtml(formatMoney(businessValue(record)))}</strong></div>
+    </div>
+    <div class="record-days">
+      <div><span>合同</span>${remainingCell(contractDays, 'contract')}</div>
+      <div><span>注册证</span>${remainingCell(regDays, 'registration')}</div>
+      <div><span>三类证</span>${remainingCell(threeDays, 'three')}</div>
+    </div>
+    <details class="record-more">
+      <summary>更多信息</summary>
+      <dl class="detail-grid">
+        <dt>手机号</dt><dd>${phoneCell(record)}</dd>
+        <dt>人才部</dt><dd>${escapeHtml(record.departmentPersonal || '—')}</dd>
+        <dt>企业部</dt><dd>${escapeHtml(record.departmentEnterprise || '—')}</dd>
+        <dt>收证价</dt><dd>${escapeHtml(formatMoney(record.receivePrice))}</dd>
+        <dt>回款日期</dt><dd>${escapeHtml(formatDisplayDate(record.paymentDate))}</dd>
+        <dt>注册证办结</dt><dd>${escapeHtml(formatDisplayDate(record.registrationDate))}</dd>
+        <dt>合同有效期</dt><dd>${record.contractMonths ? `${escapeHtml(record.contractMonths)} 个月` : '—'}</dd>
+        <dt>合同到期日</dt><dd>${escapeHtml(formatDisplayDate(computeContractExpiry(record)))}</dd>
+        <dt>注册证到期</dt><dd>${escapeHtml(formatDisplayDate(record.regExpiryDate))}</dd>
+        <dt>三类证到期</dt><dd>${escapeHtml(formatDisplayDate(record.threeExpiryDate))}</dd>
+        <dt>备注</dt><dd>${escapeHtml(record.remarks || '—')}</dd>
+      </dl>
+    </details>
+    <div class="record-actions">${actions}</div>
+  </article>`;
 }
 
 function renderPagination(totalPages) {
@@ -920,13 +807,14 @@ function jumpToRecord(recordId) {
   state.activePage = 'ledger';
   state.page = 1;
   renderAll();
+  $('#main-content').scrollTop = 0;
   requestAnimationFrame(() => {
     const safeId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(recordId) : recordId.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
     const row = $(`#row-${safeId}`);
     row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 }
-/* ---------------- 弹窗与安全交互 ---------------- */
+/* ---------------- 弹窗（底部抽屉） ---------------- */
 
 function showToast(message, type = 'success', timeout = 3200) {
   const root = $('#toast-root');
@@ -964,10 +852,6 @@ function closeModal(force = false) {
   if (!state.modal || (state.modal.closeDisabled && !force)) return;
   const root = $('#modal-root');
   root.querySelector('#modal-backdrop')?.classList.remove('visible');
-  if (state.authResolver) {
-    state.authResolver(false);
-    state.authResolver = null;
-  }
   state.modal = null;
   document.body.style.overflow = '';
   setTimeout(() => {
@@ -975,139 +859,6 @@ function closeModal(force = false) {
   }, 180);
 }
 
-function requestPassword(title = '安全验证', message = '请输入管理密码后继续。') {
-  return new Promise((resolve) => {
-    if (!state.vault) {
-      showToast('请先初始化安全密码。', 'warning');
-      resolve(false);
-      return;
-    }
-    state.authResolver = resolve;
-    openModal({
-      title,
-      subtitle: '敏感信息二次验证',
-      size: 'small',
-      content: `<form id="auth-form" class="form-grid" autocomplete="off">
-        <div class="form-group span-3">
-          <div class="security-box"><span class="security-box-icon">⌾</span><span>${escapeHtml(message)}</span></div>
-        </div>
-        <div class="form-group span-3">
-          <label for="auth-password">管理密码</label>
-          <input id="auth-password" name="password" type="password" required autocomplete="current-password" autofocus>
-          <div class="form-error" id="auth-error" hidden></div>
-        </div>
-      </form>`,
-      footer: '<button class="button subtle" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="auth-form">验证</button>'
-    });
-  });
-}
-
-function openSetupVault() {
-  openModal({
-    title: '初始化安全密码',
-    subtitle: '用于加密手机号，并在每次查看时进行二次验证',
-    size: 'small',
-    content: `<form id="setup-vault-form" class="form-grid" autocomplete="off">
-      <div class="form-group span-3">
-        <div class="security-box"><span class="security-box-icon">🔐</span><span>系统不会保存明文密码。密码至少 6 位，请妥善保管；忘记密码后，已加密手机号无法恢复。</span></div>
-      </div>
-      <div class="form-group span-3">
-        <label for="setup-password">管理密码</label>
-        <input id="setup-password" name="password" type="password" minlength="6" required autocomplete="new-password">
-      </div>
-      <div class="form-group span-3">
-        <label for="setup-password-confirm">确认密码</label>
-        <input id="setup-password-confirm" name="confirmPassword" type="password" minlength="6" required autocomplete="new-password">
-      </div>
-      <div class="form-error" id="setup-error" hidden></div>
-    </form>`,
-    footer: '<button class="button subtle" type="button" data-action="close-modal">稍后设置</button><button class="button primary" type="submit" form="setup-vault-form">创建安全中心</button>'
-  });
-}
-
-function openSecurityCenter() {
-  if (!state.vault) {
-    openSetupVault();
-    return;
-  }
-  if (!state.sessionKey) {
-    requestPassword('进入安全设置', '验证成功后可管理密码、备份与日志。').then((ok) => {
-      if (ok) openSettingsModal();
-    });
-    return;
-  }
-  openSettingsModal();
-}
-
-function openSettingsModal() {
-  const certificates = (state.settings.certificateTypes || []).join('\n');
-  const owners = (state.settings.owners || []).join('\n');
-  openModal({
-    title: '系统设置',
-    subtitle: '计算规则、选项维护、数据备份与安全操作',
-    size: 'large',
-    content: `<form id="settings-form">
-      <div class="settings-grid">
-        <section class="settings-section">
-          <h3>计算与预警规则</h3>
-          <p>修改后首页与台账将立即重新计算。</p>
-          <div class="form-group">
-            <label for="settings-alert-days">提前预警天数</label>
-            <input id="settings-alert-days" name="alertDays" type="number" min="1" max="365" value="${escapeHtml(state.settings.alertDays)}" required>
-          </div>
-          <div class="form-group">
-            <label>业绩系数（自动计算）</label>
-            <span class="form-help">人才部与企业部相同时系数为 1，不同时为 0.5；业绩 =（出证价 - 收证价）× 系数，无需手工设置。</span>
-          </div>
-        </section>
-        <section class="settings-section">
-          <h3>安全与维护</h3>
-          <p>手机号仅以 AES-GCM 密文形式保存在本机。</p>
-          <div class="security-box"><span class="security-box-icon">⌾</span><span>当前安全会话：<strong>${state.sessionKey ? '已解锁' : '已锁定'}</strong>。导出加密备份不需要密码，恢复后使用原密码解锁。</span></div>
-          <div class="settings-actions">
-            <button class="button ghost small" type="button" data-action="change-password">修改密码</button>
-            <button class="button ghost small" type="button" data-action="export-backup">导出加密备份</button>
-            <button class="button ghost small" type="button" data-action="trigger-restore">恢复备份</button>
-            <button class="button subtle small" type="button" data-action="open-logs">查看操作日志</button>
-          </div>
-          <input id="restore-backup-input" type="file" accept=".json,application/json" hidden>
-        </section>
-        <section class="settings-section">
-          <h3>证书类型选项</h3>
-          <p>每行一个，新增记录时会出现在下拉建议中。</p>
-          <div class="form-group"><textarea id="settings-cert-types" name="certificateTypes" spellcheck="false">${escapeHtml(certificates)}</textarea></div>
-        </section>
-        <section class="settings-section">
-          <h3>负责人选项</h3>
-          <p>每行一个，用于预警责任归属与筛选。</p>
-          <div class="form-group"><textarea id="settings-owners" name="owners" spellcheck="false">${escapeHtml(owners)}</textarea></div>
-        </section>
-      </div>
-    </form>`,
-    footer: '<span class="footer-left">设置保存在当前浏览器</span><button class="button subtle" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="settings-form">保存设置</button>'
-  });
-}
-
-async function openLogsModal() {
-  const verification = await verifyLogChain();
-  const statusClass = verification.ok ? 'ok' : 'bad';
-  const statusText = verification.ok ? '哈希链验证通过，未发现日志篡改' : '警告：日志哈希链不连续，可能被外部修改';
-  const entries = [...state.logs].reverse();
-  const content = `<div class="chain-status ${statusClass}"><span>${verification.ok ? '✓' : '!'}</span><span>${statusText}</span></div>
-    <div class="log-list">${entries.length ? entries.map((entry) => `
-      <div class="log-item">
-        <span class="log-time">${escapeHtml(entry.timestamp)}</span>
-        <span class="log-action">${escapeHtml(entry.action)}</span>
-        <span class="log-detail">${escapeHtml(typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details))}${entry.recordId ? ` · 记录 ${escapeHtml(entry.recordId)}` : ''}</span>
-      </div>`).join('') : '<div class="empty-state">暂无操作日志</div>'}</div>`;
-  openModal({
-    title: '操作日志',
-    subtitle: `共 ${state.logs.length} 条，按时间倒序显示`,
-    size: 'large',
-    content,
-    footer: '<button class="button ghost" type="button" data-action="export-logs">导出日志 CSV</button><button class="button primary" type="button" data-action="close-modal">关闭</button>'
-  });
-}
 /* ---------------- 台账编辑 ---------------- */
 
 function recordFormValue(record, key) {
@@ -1116,11 +867,6 @@ function recordFormValue(record, key) {
 }
 
 function openRecordModal(recordId = '') {
-  if (!state.vault) {
-    showToast('请先初始化安全密码，再维护台账。', 'warning');
-    openSetupVault();
-    return;
-  }
   const record = recordId ? state.records.find((item) => item.id === recordId) : null;
   if (recordId && !record) {
     showToast('未找到对应记录。', 'error');
@@ -1131,7 +877,9 @@ function openRecordModal(recordId = '') {
     .map((value) => `<option value="${escapeHtml(value)}"></option>`).join('');
   const ownerOptions = (state.settings.owners || [])
     .map((value) => `<option value="${escapeHtml(value)}"></option>`).join('');
-  const currentPhoneText = record?.phoneCipher ? '当前手机号已加密保存。留空保持不变。' : '手机号将加密保存，默认显示为掩码。';
+  const legacyPhoneNote = record?.phoneCipher && !record?.phone
+    ? '该记录的手机号仍是旧版加密格式，可直接输入新号码，或在「设置」里一键迁移。'
+    : '';
   const contractMonthsValue = Math.min(36, Math.max(1, Math.round(safeNumber(record?.contractMonths, 12)) || 12));
   const contractMonthOptions = Array.from({ length: 36 }, (_, index) => index + 1)
     .map((value) => `<option value="${value}" ${value === contractMonthsValue ? 'selected' : ''}>${value} 个月</option>`).join('');
@@ -1147,11 +895,8 @@ function openRecordModal(recordId = '') {
     </div>
     <div class="form-group">
       <label for="record-phone">手机号</label>
-      <div style="display:flex;gap:7px">
-        <input id="record-phone" name="phone" type="tel" inputmode="tel" value="" placeholder="${record?.phoneCipher ? '已加密，输入新号码可替换' : '请输入手机号'}">
-        ${record?.phoneCipher ? '<button class="button subtle small" type="button" data-action="fill-current-phone">查看当前</button>' : ''}
-      </div>
-      <span class="form-help">${currentPhoneText}</span>
+      <input id="record-phone" name="phone" type="tel" inputmode="tel" value="${escapeHtml(recordFormValue(record, 'phone'))}" placeholder="请输入手机号">
+      ${legacyPhoneNote ? `<span class="form-help">${escapeHtml(legacyPhoneNote)}</span>` : ''}
     </div>
     <div class="form-group">
       <label for="record-department-personal">人才部</label>
@@ -1215,10 +960,6 @@ function openRecordModal(recordId = '') {
     <div class="form-group span-3">
       <label for="record-remarks">备注</label>
       <textarea id="record-remarks" name="remarks" placeholder="费用说明、续签情况或其他需要跟踪的信息">${escapeHtml(recordFormValue(record, 'remarks'))}</textarea>
-      ${record?.phoneCipher ? '<label class="checkbox-line"><input type="checkbox" name="clearPhone"> 清空已保存的手机号</label>' : ''}
-    </div>
-    <div class="form-group span-3">
-      <div class="security-box"><span class="security-box-icon">🔒</span><span>手机号在提交时加密；若当前安全会话已锁定，系统会要求验证管理密码。</span></div>
     </div>
     <div class="calc-preview expanded span-3">
       <div><span>业绩</span><strong id="preview-business">¥0</strong></div>
@@ -1230,7 +971,7 @@ function openRecordModal(recordId = '') {
 
   openModal({
     title: isEdit ? '编辑证书记录' : '新增证书记录',
-    subtitle: isEdit ? `正在编辑：${record.name || '未命名'}` : '日期可直接点击日历选择，计算字段将自动更新',
+    subtitle: isEdit ? `正在编辑：${record.name || '未命名'}` : '计算字段将自动更新',
     size: 'xlarge',
     content,
     footer: '<span class="footer-left">带 * 为必填项</span><button class="button subtle" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="record-form">保存记录</button>',
@@ -1286,10 +1027,6 @@ function openImportModal() {
       <div class="form-group span-3">
         <label>选择 CSV 文件</label>
         <div class="file-drop"><input id="import-file" name="file" type="file" accept=".csv,text/csv" required><span>在 Excel/WPS 中另存为“CSV UTF-8（逗号分隔）”</span></div>
-      </div>
-      <div class="form-group span-3">
-        <label class="checkbox-line"><input id="import-include-phone" name="includePhone" type="checkbox"> CSV 中包含明文手机号，导入时立即加密</label>
-        <span class="form-help">若勾选，导入前需要验证或输入安全密码。明文手机号不会写入浏览器存储。</span>
       </div>
       <div class="form-error" id="import-error" hidden></div>
     </form>`,
@@ -1387,42 +1124,30 @@ function downloadBlob(content, filename, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function importCsvFile(file, includePhone) {
+async function importCsvFile(file) {
   if (!file) throw new Error('请选择 CSV 文件');
   const text = await file.text();
   const rows = parseCsv(text);
   if (rows.length < 2) throw new Error('CSV 中没有可导入的数据行');
   const headerMap = buildHeaderMap(rows[0]);
   if (headerMap.name === undefined) throw new Error('未找到“人才姓名”列，请检查表头');
-  if (includePhone && !state.vault) throw new Error('请先在安全设置中创建管理密码');
-  if (includePhone && !state.sessionKey) {
-    const password = window.prompt('导入包含手机号，请输入管理密码：');
-    if (password === null) throw new Error('已取消导入');
-    if (!(await unlockVault(password))) throw new Error('密码验证失败');
-  }
 
   const imported = [];
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
     const name = csvValue(row, headerMap.name);
     if (!name) continue;
-    let phoneCipher = '';
-    let phoneIv = '';
-    if (includePhone && headerMap.phone !== undefined) {
-      const phone = csvValue(row, headerMap.phone);
-      if (phone && !isMaskedPhone(phone)) {
-        const encrypted = await encryptPhoneValue(phone);
-        phoneCipher = encrypted.phoneCipher;
-        phoneIv = encrypted.phoneIv;
-      }
+    let phone = '';
+    if (headerMap.phone !== undefined) {
+      const rawPhone = csvValue(row, headerMap.phone);
+      if (rawPhone && !isMaskedPhone(rawPhone)) phone = normalizePhone(rawPhone);
     }
     imported.push(normalizeRecord({
       id: `import-${Date.now()}-${rowIndex}-${Math.random().toString(16).slice(2)}`,
       sourceRow: rowIndex + 1,
       adjustmentDate: csvValue(row, headerMap.adjustmentDate),
       name,
-      phoneCipher,
-      phoneIv,
+      phone,
       departmentPersonal: csvValue(row, headerMap.departmentPersonal),
       departmentEnterprise: csvValue(row, headerMap.departmentEnterprise),
       certificateType: csvValue(row, headerMap.certificateType),
@@ -1442,7 +1167,7 @@ async function importCsvFile(file, includePhone) {
   if (!imported.length) throw new Error('未解析到有效记录，请确认“人才姓名”列有内容');
   state.records.push(...imported);
   ensureSettingsOptions();
-  await appendLog('CSV 导入', '', `文件 ${file.name}，新增 ${imported.length} 条记录，手机号${includePhone ? '已加密' : '未导入'}`);
+  appendLog('CSV 导入', '', `文件 ${file.name}，新增 ${imported.length} 条记录`);
   saveState();
   renderAll();
   closeModal(true);
@@ -1455,7 +1180,7 @@ function exportLedgerCsv() {
   const rows = active.map((record) => [
     formatDisplayDate(record.adjustmentDate),
     record.name,
-    record.phoneCipher ? maskPhone() : '',
+    record.phone || '',
     record.departmentPersonal,
     record.departmentEnterprise,
     record.certificateType,
@@ -1477,24 +1202,22 @@ function exportLedgerCsv() {
     record.remarks
   ]);
   downloadBlob(buildCsv(headers, rows), `人才证书台账_${localIsoDate()}.csv`, 'text/csv;charset=utf-8');
-  showToast(`已导出 ${rows.length} 条记录（手机号已掩码）`);
+  showToast(`已导出 ${rows.length} 条记录`);
 }
 
 function exportLogsCsv() {
-  const headers = ['时间', '操作人', '操作', '记录ID', '详情', '前一哈希', '当前哈希'];
+  const headers = ['时间', '操作人', '操作', '记录ID', '详情'];
   const rows = state.logs.map((entry) => [
     entry.timestamp,
     entry.operator,
     entry.action,
     entry.recordId,
-    typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details),
-    entry.prevHash,
-    entry.hash
+    typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details)
   ]);
   downloadBlob(buildCsv(headers, rows), `操作日志_${localIsoDate()}.csv`, 'text/csv;charset=utf-8');
   showToast(`已导出 ${rows.length} 条日志`);
 }
-/* ---------------- 记录增删改与手机号查看 ---------------- */
+/* ---------------- 记录增删改 ---------------- */
 
 async function saveRecordFromForm(form) {
   const recordId = form.dataset.recordId || '';
@@ -1502,26 +1225,11 @@ async function saveRecordFromForm(form) {
   const name = formText(form, 'name');
   if (!name) throw new Error('请填写人才姓名');
 
-  const clearPhone = Boolean(form.elements.namedItem('clearPhone')?.checked);
   const phoneInput = formText(form, 'phone');
-  let phoneCipher = existing?.phoneCipher || '';
-  let phoneIv = existing?.phoneIv || '';
-
-  if (clearPhone) {
-    phoneCipher = '';
-    phoneIv = '';
-  } else if (phoneInput) {
-    if (!state.vault) throw new Error('请先创建安全密码，再录入手机号');
-    if (!state.sessionKey) {
-      const password = window.prompt('保存手机号需要验证管理密码：');
-      if (password === null) throw new Error('已取消保存');
-      if (!(await unlockVault(password))) throw new Error('密码验证失败');
-    }
-    const encryptedPhone = await encryptPhoneValue(phoneInput);
-    if (!normalizePhone(phoneInput)) throw new Error('手机号格式无效，请检查后重试');
-    phoneCipher = encryptedPhone.phoneCipher;
-    phoneIv = encryptedPhone.phoneIv;
-  }
+  if (phoneInput && !normalizePhone(phoneInput)) throw new Error('手机号格式无效，请检查后重试');
+  const phone = normalizePhone(phoneInput);
+  // 没填新号码时，保留尚未迁移的旧版加密手机号
+  const keepLegacy = Boolean(existing) && !phone;
 
   const now = nowText();
   const record = normalizeRecord({
@@ -1529,8 +1237,9 @@ async function saveRecordFromForm(form) {
     sourceRow: existing?.sourceRow || null,
     adjustmentDate: formText(form, 'adjustmentDate'),
     name,
-    phoneCipher,
-    phoneIv,
+    phone,
+    phoneCipher: keepLegacy ? existing.phoneCipher : '',
+    phoneIv: keepLegacy ? existing.phoneIv : '',
     departmentPersonal: formText(form, 'departmentPersonal'),
     departmentEnterprise: formText(form, 'departmentEnterprise'),
     certificateType: formText(form, 'certificateType'),
@@ -1553,10 +1262,10 @@ async function saveRecordFromForm(form) {
   if (existing) {
     const index = state.records.findIndex((item) => item.id === existing.id);
     state.records[index] = record;
-    await appendLog('修改记录', record.id, `修改 ${record.name} 的台账信息`);
+    appendLog('修改记录', record.id, `修改 ${record.name} 的台账信息`);
   } else {
     state.records.push(record);
-    await appendLog('新增记录', record.id, `新增 ${record.name} · ${record.certificateType || '未填写证书类型'}`);
+    appendLog('新增记录', record.id, `新增 ${record.name} · ${record.certificateType || '未填写证书类型'}`);
   }
   ensureSettingsOptions();
   saveState();
@@ -1570,7 +1279,7 @@ async function deleteRecord(recordId) {
   if (!window.confirm(`确定将“${record.name}”移入已删除记录吗？操作日志会保留。`)) return;
   record.deletedAt = nowText();
   record.updatedAt = nowText();
-  await appendLog('删除记录', record.id, `将 ${record.name} 移入已删除记录`);
+  appendLog('删除记录', record.id, `将 ${record.name} 移入已删除记录`);
   saveState();
   renderAll();
   showToast('记录已移入已删除列表', 'warning');
@@ -1581,62 +1290,13 @@ async function restoreRecord(recordId) {
   if (!record) return;
   record.deletedAt = null;
   record.updatedAt = nowText();
-  await appendLog('恢复记录', record.id, `恢复 ${record.name} 的台账记录`);
+  appendLog('恢复记录', record.id, `恢复 ${record.name} 的台账记录`);
   saveState();
   renderAll();
   showToast('记录已恢复');
 }
 
-async function revealPhone(recordId) {
-  const record = state.records.find((item) => item.id === recordId);
-  if (!record?.phoneCipher) return;
-  const verified = await requestPassword('查看手机号', '此操作会记录在操作日志中，明文仅显示 30 秒。');
-  if (!verified) return;
-  try {
-    const phone = await decryptPhoneValue(record);
-    state.revealedPhones.set(record.id, { value: phone, until: Date.now() + SESSION_REVEAL_MS });
-    await appendLog('查看手机号', record.id, `查看 ${record.name} 的手机号（明文未写入日志）`);
-    saveState();
-    renderLedger();
-    setTimeout(() => {
-      const current = state.revealedPhones.get(record.id);
-      if (current && current.until <= Date.now()) {
-        state.revealedPhones.delete(record.id);
-        renderLedger();
-      }
-    }, SESSION_REVEAL_MS + 100);
-  } catch (error) {
-    showToast(error.message || '手机号解密失败', 'error');
-  }
-}
-
-function hidePhone(recordId) {
-  state.revealedPhones.delete(recordId);
-  renderLedger();
-}
-
-async function fillCurrentPhone() {
-  const form = $('#record-form');
-  const recordId = form?.dataset.recordId;
-  const record = state.records.find((item) => item.id === recordId);
-  if (!record?.phoneCipher) return;
-  const password = window.prompt('查看当前手机号需要验证管理密码：');
-  if (password === null) return;
-  if (!(await unlockVault(password))) {
-    showToast('密码验证失败', 'error');
-    return;
-  }
-  try {
-    const phone = await decryptPhoneValue(record);
-    form.elements.namedItem('phone').value = phone;
-    await appendLog('查看手机号', record.id, `在编辑表单中查看 ${record.name} 的手机号（明文未写入日志）`);
-    saveState();
-    showToast('已填入当前手机号，可直接修改');
-  } catch (error) {
-    showToast(error.message || '手机号解密失败', 'error');
-  }
-}
-/* ---------------- 设置、备份与密码维护 ---------------- */
+/* ---------------- 设置、备份与迁移 ---------------- */
 
 async function saveSettingsFromForm(form) {
   const alertDays = Math.max(1, Math.round(safeNumber(formText(form, 'alertDays'), DEFAULT_ALERT_DAYS)));
@@ -1646,97 +1306,117 @@ async function saveSettingsFromForm(form) {
   state.settings.certificateTypes = Array.from(new Set([...DEFAULT_CERT_TYPES, ...certificateTypes]));
   state.settings.owners = Array.from(new Set(owners));
   ensureSettingsOptions();
-  await appendLog('修改设置', '', `预警天数=${alertDays}`);
+  appendLog('修改设置', '', `预警天数=${alertDays}`);
   saveState();
   renderAll();
-  closeModal(true);
-  showToast('系统设置已保存');
+  showToast('设置已保存');
 }
 
 async function saveMonthlyPlan() {
   const monthKey = currentMonthKey();
   const value = Math.max(0, safeNumber($('#monthly-plan-input').value, 0));
   state.settings.monthlyPlans[monthKey] = value;
-  await appendLog('设置月度计划', '', `${monthKey} 计划业绩=${value}`);
+  appendLog('设置月度计划', '', `${monthKey} 计划业绩=${value}`);
   saveState();
   renderDashboard();
   showToast(`已保存 ${monthKey} 计划业绩`);
 }
 
-function exportEncryptedBackup() {
+function exportBackup() {
   const payload = {
     version: DATA_VERSION,
     exportedAt: nowText(),
     records: state.records,
     settings: state.settings,
     logs: state.logs,
-    vault: state.vault
+    vault: state.legacyVault
   };
-  downloadBlob(JSON.stringify(payload, null, 2), `人才证书系统加密备份_${localIsoDate()}.json`, 'application/json;charset=utf-8');
-  showToast('加密备份已导出');
+  downloadBlob(JSON.stringify(payload, null, 2), `人才证书系统备份_${localIsoDate()}.json`, 'application/json;charset=utf-8');
+  showToast('备份已导出（含手机号明文，请妥善保管）', 'warning');
 }
 
-async function restoreEncryptedBackup(file) {
+async function restoreBackup(file) {
   if (!file) return;
   const text = await file.text();
-  const payload = JSON.parse(text);
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('备份文件不是有效的 JSON');
+  }
   if (!Array.isArray(payload.records) || !payload.settings) throw new Error('备份文件结构无效');
   if (!window.confirm(`确定恢复备份吗？当前 ${state.records.length} 条记录将被备份中的 ${payload.records.length} 条记录替换。`)) return;
   state.records = payload.records.map(normalizeRecord);
   state.settings = { ...defaultSettings(), ...(payload.settings || {}) };
   state.settings.monthlyPlans = { ...(payload.settings?.monthlyPlans || {}) };
-  state.logs = Array.isArray(payload.logs) ? payload.logs : [];
-  state.vault = payload.vault || null;
-  state.sessionKey = null;
-  state.revealedPhones.clear();
+  state.logs = Array.isArray(payload.logs) ? payload.logs.map(({ prevHash, hash, ...entry }) => entry) : [];
+  state.legacyVault = payload.vault || null;
+  if (!hasLegacyPhones()) state.legacyVault = null;
   ensureSettingsOptions();
-  await appendLog('恢复备份', '', `从 ${file.name} 恢复 ${state.records.length} 条记录`);
+  appendLog('恢复备份', '', `从 ${file.name} 恢复 ${state.records.length} 条记录`);
   saveState();
   renderAll();
-  closeModal(true);
-  showToast('备份已恢复，安全会话已锁定');
+  showToast('备份已恢复');
+  if (hasLegacyPhones()) setTimeout(openMigrateModal, 400);
 }
 
-async function beginChangePassword() {
-  const verified = await requestPassword('修改管理密码', '先验证当前密码，再设置新的管理密码。');
-  if (!verified) return;
+function openMigrateModal() {
+  if (!hasLegacyPhones()) {
+    showToast('没有需要迁移的数据');
+    return;
+  }
+  const count = state.records.filter((record) => record.phoneCipher && !record.phone).length;
   openModal({
-    title: '设置新管理密码',
-    subtitle: '修改后，已有手机号会使用新密码重新加密',
+    title: '迁移旧版手机号',
+    subtitle: `发现 ${count} 条旧版加密手机号`,
     size: 'small',
-    content: `<form id="change-password-form" class="form-grid" autocomplete="off">
-      <div class="form-group span-3"><label for="new-password">新密码</label><input id="new-password" name="newPassword" type="password" minlength="6" required autocomplete="new-password"></div>
-      <div class="form-group span-3"><label for="new-password-confirm">确认新密码</label><input id="new-password-confirm" name="confirmPassword" type="password" minlength="6" required autocomplete="new-password"></div>
-      <div class="form-error" id="change-password-error" hidden></div>
+    content: `<form id="migrate-form" class="form-grid" autocomplete="off">
+      <div class="import-guide">新版已取消加密，手机号直接保存、点击即可拨号。请输入旧版管理密码完成一次性转换，转换后不再需要密码。</div>
+      <div class="form-group">
+        <label for="migrate-password">旧版管理密码</label>
+        <input id="migrate-password" name="password" type="password" required autocomplete="current-password">
+      </div>
+      <div class="form-error" id="migrate-error" hidden></div>
     </form>`,
-    footer: '<button class="button subtle" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="change-password-form">确认修改</button>'
+    footer: '<button class="button subtle" type="button" data-action="close-modal">稍后</button><button class="button primary" type="submit" form="migrate-form">转换</button>'
   });
 }
 
-async function changePasswordFromForm(form) {
-  const newPassword = formText(form, 'newPassword');
-  const confirmPassword = formText(form, 'confirmPassword');
-  if (newPassword.length < 6) throw new Error('新密码至少 6 位');
-  if (newPassword !== confirmPassword) throw new Error('两次输入的新密码不一致');
-  if (!state.sessionKey) throw new Error('安全会话已锁定，请重新验证');
-
-  const phonePlain = new Map();
-  for (const record of state.records) {
-    if (record.phoneCipher) phonePlain.set(record.id, await decryptPhoneValue(record));
-  }
-  await createVault(newPassword);
-  for (const record of state.records) {
-    if (!phonePlain.has(record.id)) continue;
-    const encrypted = await encryptPhoneValue(phonePlain.get(record.id));
-    record.phoneCipher = encrypted.phoneCipher;
-    record.phoneIv = encrypted.phoneIv;
-  }
-  await appendLog('修改安全密码', '', `重新加密 ${phonePlain.size} 个手机号`);
+async function migrateFromForm(form) {
+  const password = String(form.elements.namedItem('password')?.value || '');
+  const result = await decryptLegacyPhones(state.legacyVault, password, state.records);
+  if (!result.ok) throw new Error('密码不正确，请重新输入');
+  let converted = 0;
+  state.records.forEach((record) => {
+    const phone = result.phones.get(record.id);
+    if (phone === undefined) return;
+    record.phone = normalizePhone(phone);
+    record.phoneCipher = '';
+    record.phoneIv = '';
+    converted += 1;
+  });
+  if (!hasLegacyPhones()) state.legacyVault = null;
+  appendLog('迁移手机号', '', `将 ${converted} 条旧版加密手机号转换为明文`);
   saveState();
   renderAll();
   closeModal(true);
-  showToast('管理密码已修改，手机号已重新加密');
+  showToast(`已转换 ${converted} 条手机号`);
 }
+
+window.__handleBack = () => {
+  if (state.modal) {
+    closeModal();
+    return true;
+  }
+  if (state.activePage !== 'dashboard') {
+    state.activePage = 'dashboard';
+    state.filters.focusId = '';
+    renderAll();
+    return true;
+  }
+  return false;
+};
+
 /* ---------------- 事件处理 ---------------- */
 
 function setFormError(id, message) {
@@ -1751,63 +1431,12 @@ document.addEventListener('submit', async (event) => {
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
   try {
-    if (form.id === 'setup-vault-form') {
-      const password = formText(form, 'password');
-      const confirmPassword = formText(form, 'confirmPassword');
-      if (password.length < 6) throw new Error('密码至少 6 位');
-      if (password !== confirmPassword) throw new Error('两次输入的密码不一致');
-      await createVault(password);
-      await appendLog('初始化安全中心', '', '创建本地 AES-GCM 加密密钥');
-      saveState();
-      renderSecurityStatus();
-      closeModal(true);
-      showToast('安全中心已创建，当前会话已解锁');
-      return;
-    }
-
-    if (form.id === 'auth-form') {
-      const password = formText(form, 'password');
-      const ok = await unlockVault(password);
-      if (!ok) {
-        setFormError('auth-error', '密码验证失败，请重新输入。');
-        form.elements.namedItem('password').select();
-        return;
-      }
-      const resolver = state.authResolver;
-      state.authResolver = null;
-      closeModal(true);
-      if (resolver) resolver(true);
-      renderSecurityStatus();
-      return;
-    }
-
-    if (form.id === 'record-form') {
-      await saveRecordFromForm(form);
-      return;
-    }
-
-    if (form.id === 'settings-form') {
-      await saveSettingsFromForm(form);
-      return;
-    }
-
-    if (form.id === 'change-password-form') {
-      await changePasswordFromForm(form);
-      return;
-    }
-
-    if (form.id === 'import-form') {
-      const file = form.elements.namedItem('file')?.files?.[0];
-      const includePhone = Boolean(form.elements.namedItem('includePhone')?.checked);
-      await importCsvFile(file, includePhone);
-      return;
-    }
+    if (form.id === 'record-form') await saveRecordFromForm(form);
+    else if (form.id === 'settings-form') await saveSettingsFromForm(form);
+    else if (form.id === 'migrate-form') await migrateFromForm(form);
+    else if (form.id === 'import-form') await importCsvFile(form.elements.namedItem('file')?.files?.[0]);
   } catch (error) {
-    const errorTarget = form.id === 'auth-form' ? 'auth-error'
-      : form.id === 'setup-vault-form' ? 'setup-error'
-      : form.id === 'import-form' ? 'import-error'
-      : form.id === 'change-password-form' ? 'change-password-error'
-      : '';
+    const errorTarget = { 'import-form': 'import-error', 'migrate-form': 'migrate-error' }[form.id];
     if (errorTarget) setFormError(errorTarget, error.message || String(error));
     else showToast(error.message || String(error), 'error', 4500);
   }
@@ -1827,6 +1456,20 @@ document.addEventListener('click', async (event) => {
         state.activePage = actionElement.dataset.page || 'dashboard';
         state.filters.focusId = '';
         renderAll();
+        $('#main-content').scrollTop = 0;
+        break;
+      case 'toggle-filters': {
+        const panel = $('#filter-panel');
+        panel.hidden = !panel.hidden;
+        actionElement.setAttribute('aria-expanded', String(!panel.hidden));
+        break;
+      }
+      case 'show-more-logs':
+        state.logLimit += 30;
+        renderLogs();
+        break;
+      case 'open-migrate':
+        openMigrateModal();
         break;
       case 'add-record':
         openRecordModal();
@@ -1839,15 +1482,6 @@ document.addEventListener('click', async (event) => {
         break;
       case 'restore-record':
         await restoreRecord(recordId);
-        break;
-      case 'reveal-phone':
-        await revealPhone(recordId);
-        break;
-      case 'hide-phone':
-        hidePhone(recordId);
-        break;
-      case 'fill-current-phone':
-        await fillCurrentPhone();
         break;
       case 'jump-record':
         jumpToRecord(recordId);
@@ -1863,6 +1497,7 @@ document.addEventListener('click', async (event) => {
         state.page = 1;
         $('#filter-status').value = 'warning';
         renderAll();
+        $('#main-content').scrollTop = 0;
         break;
       case 'page-prev':
         state.page = Math.max(1, state.page - 1);
@@ -1897,27 +1532,8 @@ document.addEventListener('click', async (event) => {
       case 'export-logs':
         exportLogsCsv();
         break;
-      case 'open-settings':
-        openSettingsModal();
-        break;
-      case 'open-security':
-        openSecurityCenter();
-        break;
-      case 'open-logs':
-        await openLogsModal();
-        break;
-      case 'lock-vault':
-        state.sessionKey = null;
-        state.revealedPhones.clear();
-        renderSecurityStatus();
-        renderLedger();
-        showToast('安全会话已锁定', 'warning');
-        break;
-      case 'change-password':
-        await beginChangePassword();
-        break;
       case 'export-backup':
-        exportEncryptedBackup();
+        exportBackup();
         break;
       case 'trigger-restore':
         $('#restore-backup-input')?.click();
@@ -1974,7 +1590,7 @@ document.addEventListener('change', async (event) => {
     renderLedger();
   } else if (target.id === 'restore-backup-input' && target.files?.[0]) {
     try {
-      await restoreEncryptedBackup(target.files[0]);
+      await restoreBackup(target.files[0]);
     } catch (error) {
       showToast(error.message || '备份恢复失败', 'error', 5000);
     } finally {
@@ -2012,9 +1628,7 @@ async function initApp() {
     renderAll();
     state.initialized = true;
     $('#boot-overlay').classList.add('hidden');
-    if (!state.vault) {
-      setTimeout(() => openSetupVault(), 380);
-    }
+    if (hasLegacyPhones()) setTimeout(openMigrateModal, 500);
   } catch (error) {
     console.error(error);
     $('#boot-overlay').innerHTML = `<div class="boot-card"><strong>系统载入失败</strong><span>${escapeHtml(error.message || String(error))}</span><span>请重启应用；若仍失败，请更新「Android System WebView」或 Chrome 后重试。</span></div>`;

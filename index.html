@@ -9,289 +9,210 @@
 </head>
 <body>
   <div class="app-shell" id="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" role="img">
-            <path d="M9 7h30v34H9z" fill="none" stroke="currentColor" stroke-width="2.5" rx="7"/>
-            <path d="M16 16h16M16 23h12M16 30h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
-            <path d="m31.5 31.5 3 3 6-7" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <div>
-          <strong>人才证书</strong>
-          <span>业绩管理系统</span>
-        </div>
+    <header class="app-bar">
+      <div class="app-bar-title">
+        <h1 id="page-title">首页</h1>
+        <p id="page-subtitle"></p>
       </div>
-
-      <nav class="main-nav" aria-label="主导航">
-        <button class="nav-item active" data-action="navigate" data-page="dashboard">
-          <span class="nav-icon">◫</span><span>首页看板</span>
-        </button>
-        <button class="nav-item" data-action="navigate" data-page="ledger">
-          <span class="nav-icon">▤</span><span>详细台账</span>
-        </button>
-        <button class="nav-item" data-action="open-logs">
-          <span class="nav-icon">⌛</span><span>操作日志</span>
-        </button>
-        <button class="nav-item" data-action="open-settings">
-          <span class="nav-icon">⚙</span><span>系统设置</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-note">
-        <div class="security-line">
-          <span class="status-dot" id="security-dot"></span>
-          <span id="security-label">安全中心未初始化</span>
-        </div>
-        <p>手机号以 AES-GCM 加密保存，查看前必须二次验证。</p>
-        <button class="text-button light" data-action="open-security">安全设置</button>
+      <div class="today-chip">
+        <span>今天</span>
+        <strong id="today-label"></strong>
       </div>
-    </aside>
+    </header>
 
-    <main class="main-content">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow" id="page-eyebrow">业务总览</p>
-          <h1 id="page-title">首页看板</h1>
-          <p class="page-subtitle" id="page-subtitle">业绩进度、到期预警与证书状态一览</p>
-        </div>
-        <div class="topbar-actions">
-          <div class="today-chip">
-            <span>今天</span>
-            <strong id="today-label"></strong>
-          </div>
-          <button class="button primary" data-action="add-record">
-            <span>＋</span> 新增记录
-          </button>
-          <button class="icon-button" title="锁定安全会话" aria-label="锁定安全会话" data-action="lock-vault">⌾</button>
-        </div>
-      </header>
-
-      <section class="page active" id="page-dashboard" aria-labelledby="dashboard-heading">
+    <main class="main-content" id="main-content">
+      <!-- ===== 首页 ===== -->
+      <section class="page active" id="page-dashboard" aria-label="首页">
         <div class="section-heading">
-          <div>
-            <h2 id="dashboard-heading">本月经营概览</h2>
-            <p id="dashboard-month-label"></p>
-          </div>
-          <div class="legend">
-            <span><i class="legend-dot contract"></i>合同到期</span>
-            <span><i class="legend-dot three"></i>三类到期</span>
-            <span><i class="legend-dot registration"></i>注册证到期</span>
-            <span><i class="legend-dot safe"></i>正常</span>
-          </div>
+          <h2 id="dashboard-heading">本月经营概览</h2>
+          <p id="dashboard-month-label"></p>
         </div>
+
+        <article class="metric-card plan-card">
+          <div class="metric-main">
+            <span class="metric-label">当月计划业绩</span>
+            <div class="plan-input-row">
+              <span>¥</span>
+              <input id="monthly-plan-input" type="number" min="0" step="100" inputmode="decimal" aria-label="当月计划业绩">
+              <button class="button primary small" data-action="save-plan">保存</button>
+            </div>
+            <small>按月份独立保存，可随时重设</small>
+          </div>
+        </article>
+
+        <article class="metric-card progress-card">
+          <div class="metric-row">
+            <span class="metric-label">完成进度</span>
+            <strong class="metric-percent" id="metric-progress-text">0%</strong>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="metric-progress-bar"></div></div>
+          <small id="metric-progress-note">等待录入当月计划</small>
+        </article>
 
         <div class="metric-grid">
-          <article class="metric-card plan-card">
-            <div class="metric-icon">◎</div>
-            <div class="metric-main">
-              <span class="metric-label">当月计划业绩</span>
-              <div class="plan-input-row">
-                <span>¥</span>
-                <input id="monthly-plan-input" type="number" min="0" step="100" inputmode="decimal" aria-label="当月计划业绩">
-                <button class="mini-button" data-action="save-plan">保存</button>
-              </div>
-              <small>按月份独立保存，可随时重设</small>
-              <button class="monthly-sign-button" data-action="add-record">＋ 登记本月签约</button>
-            </div>
-          </article>
-
           <article class="metric-card actual-card">
-            <div class="metric-icon">↗</div>
-            <div class="metric-main">
-              <span class="metric-label">当月实际完成业绩</span>
-              <strong class="metric-value" id="metric-actual">¥0</strong>
-              <small>自动汇总当月业绩</small>
-            </div>
+            <span class="metric-label">实际完成业绩</span>
+            <strong class="metric-value" id="metric-actual">¥0</strong>
           </article>
-
-          <article class="metric-card progress-card">
-            <div class="metric-icon">%</div>
-            <div class="metric-main metric-progress-main">
-              <div class="metric-row">
-                <span class="metric-label">完成进度</span>
-                <strong class="metric-percent" id="metric-progress-text">0%</strong>
-              </div>
-              <div class="progress-track large"><div class="progress-fill" id="metric-progress-bar"></div></div>
-              <small id="metric-progress-note">等待录入当月计划</small>
-            </div>
-          </article>
-
           <article class="metric-card warning-card-metric">
-            <div class="metric-icon">!</div>
-            <div class="metric-main">
-              <span class="metric-label">即将到期/已过期</span>
-              <strong class="metric-value danger-text" id="metric-warning-count">0</strong>
-              <small>剩余天数少于 <span id="metric-alert-days">30</span> 天</small>
-            </div>
+            <span class="metric-label">即将到期/已过期</span>
+            <strong class="metric-value danger-text" id="metric-warning-count">0</strong>
+            <small>少于 <span id="metric-alert-days">30</span> 天</small>
           </article>
-
           <article class="metric-card contract-card">
-            <div class="metric-icon">契</div>
-            <div class="metric-main">
-              <span class="metric-label">当月新增合同</span>
-              <strong class="metric-value" id="metric-monthly-contracts">0</strong>
-              <small>按调证日期统计本月新增</small>
-            </div>
+            <span class="metric-label">当月新增合同</span>
+            <strong class="metric-value" id="metric-monthly-contracts">0</strong>
           </article>
-
           <article class="metric-card payment-card">
-            <div class="metric-icon">¥</div>
-            <div class="metric-main">
-              <span class="metric-label">当月回款</span>
-              <strong class="metric-value" id="metric-monthly-payment">¥0</strong>
-              <small>按回款日期汇总本月金额</small>
-            </div>
+            <span class="metric-label">当月回款</span>
+            <strong class="metric-value" id="metric-monthly-payment">¥0</strong>
           </article>
-
-          <article class="metric-card signing-card">
-            <div class="metric-icon">签</div>
-            <div class="metric-main">
-              <span class="metric-label">当月签约金额</span>
-              <strong class="metric-value" id="metric-monthly-signing">¥0</strong>
-              <small>按本月新增合同的出证价汇总</small>
-            </div>
-          </article>
-        </div>
-
-        <div class="dashboard-grid">
-          <article class="card chart-card span-2">
-            <div class="card-heading">
-              <div>
-                <h3>近六个月业绩趋势</h3>
-                <p>按调证日期汇总业绩</p>
-              </div>
-              <span class="soft-badge">自动统计</span>
-            </div>
-            <div id="trend-chart" class="mini-chart" aria-label="近六个月业绩趋势图"></div>
-          </article>
-
-          <article class="card chart-card">
-            <div class="card-heading">
-              <div>
-                <h3>证书结构</h3>
-                <p>当前台账证书类型分布</p>
-              </div>
-            </div>
-            <div id="cert-distribution" class="distribution-list"></div>
+          <article class="metric-card signing-card span-2">
+            <span class="metric-label">当月签约金额（按出证价）</span>
+            <strong class="metric-value" id="metric-monthly-signing">¥0</strong>
           </article>
         </div>
 
         <article class="card warning-panel">
-          <div class="card-heading warning-heading">
+          <div class="card-heading">
             <div>
-              <h3><span class="warning-symbol">⚠</span> 到期预警汇总</h3>
-              <p>点击任一条目可跳转到详细台账对应记录</p>
+              <h3>⚠ 到期预警</h3>
+              <p>点击条目可跳转到台账对应记录</p>
             </div>
-            <button class="button ghost small" data-action="show-all-warnings">查看全部预警</button>
+            <button class="button ghost small" data-action="show-all-warnings">全部</button>
           </div>
           <div id="warning-list" class="warning-list"></div>
         </article>
-      </section>
 
-      <section class="page" id="page-ledger" aria-labelledby="ledger-heading">
-        <div class="section-heading">
-          <div>
-            <h2 id="ledger-heading">详细台账</h2>
-            <p>所有计算字段实时更新，手机号默认隐藏</p>
-          </div>
-          <div class="heading-actions">
-            <button class="button ghost" data-action="import-csv">导入 CSV</button>
-            <button class="button ghost" data-action="export-csv">导出 CSV</button>
-            <button class="button primary" data-action="add-record">＋ 新增记录</button>
-          </div>
-        </div>
-
-        <div class="filter-card">
-          <div class="filter-grid">
-            <label class="search-field">
-              <span>快速搜索</span>
-              <input id="filter-search" type="search" placeholder="姓名、部门、证书类型、备注、负责人">
-            </label>
-            <label>
-              <span>证书类型</span>
-              <select id="filter-type"><option value="">全部类型</option></select>
-            </label>
-            <label>
-              <span>状态</span>
-              <select id="filter-status">
-                <option value="all">全部有效记录</option>
-                <option value="warning">即将到期/已过期</option>
-                <option value="normal">状态正常</option>
-                <option value="deleted">已删除记录</option>
-              </select>
-            </label>
-            <label>
-              <span>负责人</span>
-              <select id="filter-owner"><option value="">全部负责人</option></select>
-            </label>
-            <label>
-              <span>调证开始日期</span>
-              <input id="filter-date-from" type="date">
-            </label>
-            <label>
-              <span>调证结束日期</span>
-              <input id="filter-date-to" type="date">
-            </label>
-            <button class="button subtle reset-button" data-action="reset-filters">重置筛选</button>
-          </div>
-          <div class="filter-summary">
-            <span id="ledger-count">共 0 条</span>
-            <span id="ledger-formula-note">业绩 =（出证价 - 收证价）× 业绩系数（人才部与企业部相同为 1，不同为 0.5）</span>
-          </div>
-        </div>
-
-        <div class="ledger-focus" id="ledger-focus-banner" hidden></div>
-
-        <article class="table-card">
-          <div class="table-scroll">
-            <table class="data-table ledger-table">
-              <thead>
-                <tr>
-                  <th>调证日期</th>
-                  <th>人才姓名</th>
-                  <th>手机号</th>
-                  <th>人才部</th>
-                  <th>企业部</th>
-                  <th>证书类型</th>
-                  <th class="number-cell">收证价</th>
-                  <th class="number-cell">出证价</th>
-                  <th class="number-cell">回款金额</th>
-                  <th>回款日期</th>
-                  <th class="number-cell">业绩</th>
-                  <th>注册证办结日期</th>
-                  <th>合同有效期（月）</th>
-                  <th>合同到期日</th>
-                  <th class="number-cell">合同到期天数</th>
-                  <th>注册证有效期</th>
-                  <th class="number-cell">注册证到期天数</th>
-                  <th>三类人员证有效期</th>
-                  <th class="number-cell">三类到期天数</th>
-                  <th>状态提醒</th>
-                  <th>负责人</th>
-                  <th>备注</th>
-                  <th class="actions-cell">操作</th>
-                </tr>
-              </thead>
-              <tbody id="ledger-table-body"></tbody>
-            </table>
-          </div>
-          <div class="table-footer">
-            <div class="page-size">
-              <span>每页</span>
-              <select id="page-size">
-                <option value="10">10 条</option>
-                <option value="20" selected>20 条</option>
-                <option value="50">50 条</option>
-                <option value="100">100 条</option>
-              </select>
+        <article class="card chart-card">
+          <div class="card-heading">
+            <div>
+              <h3>近六个月业绩趋势</h3>
+              <p>按调证日期汇总</p>
             </div>
-            <div class="pagination" id="pagination"></div>
           </div>
+          <div id="trend-chart" class="mini-chart" aria-label="近六个月业绩趋势图"></div>
+        </article>
+
+        <article class="card chart-card">
+          <div class="card-heading">
+            <div>
+              <h3>证书结构</h3>
+              <p>当前台账证书类型分布</p>
+            </div>
+          </div>
+          <div id="cert-distribution" class="distribution-list"></div>
         </article>
       </section>
+
+      <!-- ===== 台账 ===== -->
+      <section class="page" id="page-ledger" aria-label="台账">
+        <div class="search-row">
+          <input id="filter-search" type="search" placeholder="搜索姓名、部门、证书、备注、负责人">
+          <button class="button subtle" id="filter-toggle" data-action="toggle-filters" aria-expanded="false">筛选</button>
+        </div>
+
+        <div class="filter-panel" id="filter-panel" hidden>
+          <label><span>证书类型</span>
+            <select id="filter-type"><option value="">全部类型</option></select>
+          </label>
+          <label><span>状态</span>
+            <select id="filter-status">
+              <option value="all">全部有效记录</option>
+              <option value="warning">即将到期/已过期</option>
+              <option value="normal">状态正常</option>
+              <option value="deleted">已删除记录</option>
+            </select>
+          </label>
+          <label><span>负责人</span>
+            <select id="filter-owner"><option value="">全部负责人</option></select>
+          </label>
+          <label><span>调证开始日期</span>
+            <input id="filter-date-from" type="date">
+          </label>
+          <label><span>调证结束日期</span>
+            <input id="filter-date-to" type="date">
+          </label>
+          <label><span>每页条数</span>
+            <select id="page-size">
+              <option value="10">10 条</option>
+              <option value="20" selected>20 条</option>
+              <option value="50">50 条</option>
+            </select>
+          </label>
+          <button class="button subtle" data-action="reset-filters">重置筛选</button>
+        </div>
+
+        <div class="filter-summary"><span id="ledger-count">共 0 条</span></div>
+        <div class="ledger-focus" id="ledger-focus-banner" hidden></div>
+
+        <div class="record-list" id="ledger-list"></div>
+        <div class="pagination" id="pagination"></div>
+        <p class="formula-note">业绩 =（出证价 - 收证价）× 业绩系数（人才部与企业部相同为 1，不同为 0.5）</p>
+      </section>
+
+      <!-- ===== 设置 ===== -->
+      <section class="page" id="page-settings" aria-label="设置">
+        <form id="settings-form" class="settings-card">
+          <h3>计算与预警</h3>
+          <div class="form-group">
+            <label for="settings-alert-days">提前预警天数</label>
+            <input id="settings-alert-days" name="alertDays" type="number" min="1" max="365" inputmode="numeric" required>
+            <span class="form-help">业绩系数自动计算：人才部与企业部相同为 1，不同为 0.5。</span>
+          </div>
+          <div class="form-group">
+            <label for="settings-cert-types">证书类型选项（每行一个）</label>
+            <textarea id="settings-cert-types" name="certificateTypes" spellcheck="false" rows="5"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="settings-owners">负责人选项（每行一个）</label>
+            <textarea id="settings-owners" name="owners" spellcheck="false" rows="3"></textarea>
+          </div>
+          <button class="button primary block" type="submit">保存设置</button>
+        </form>
+
+        <div class="settings-card">
+          <h3>数据管理</h3>
+          <div class="action-list">
+            <button class="action-row" data-action="import-csv"><span>导入 CSV</span><i>›</i></button>
+            <button class="action-row" data-action="export-csv"><span>导出台账 CSV</span><i>›</i></button>
+            <button class="action-row" data-action="export-backup"><span>导出备份（JSON）</span><i>›</i></button>
+            <button class="action-row" data-action="trigger-restore"><span>恢复备份</span><i>›</i></button>
+            <button class="action-row" id="legacy-row" data-action="open-migrate" hidden><span>迁移旧版加密手机号</span><i>›</i></button>
+          </div>
+          <input id="restore-backup-input" type="file" accept=".json,application/json" hidden>
+          <p class="form-help">数据只保存在本机，卸载应用或清除数据会丢失，请定期导出备份。</p>
+        </div>
+
+        <div class="settings-card">
+          <h3>操作日志</h3>
+          <p class="form-help" id="log-summary"></p>
+          <div class="log-list" id="log-list"></div>
+          <div class="log-actions">
+            <button class="button subtle" id="log-more" data-action="show-more-logs" hidden>加载更多</button>
+            <button class="button ghost" data-action="export-logs">导出日志 CSV</button>
+          </div>
+        </div>
+      </section>
     </main>
+
+    <nav class="tab-bar" aria-label="主导航">
+      <button class="tab-item active" data-action="navigate" data-page="dashboard">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></svg>
+        <span>首页</span>
+      </button>
+      <button class="tab-item" data-action="navigate" data-page="ledger">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/></svg>
+        <span>台账</span>
+      </button>
+      <button class="tab-add" data-action="add-record" aria-label="新增记录">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="tab-item" data-action="navigate" data-page="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z"/></svg>
+        <span>设置</span>
+      </button>
+    </nav>
   </div>
 
   <div id="modal-root"></div>
@@ -300,7 +221,6 @@
     <div class="boot-card">
       <div class="loader"></div>
       <strong>正在载入证书台账</strong>
-      <span>检查加密数据与历史记录…</span>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>
