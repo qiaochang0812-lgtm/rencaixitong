@@ -141,15 +141,3 @@ jobs:
             git pull --rebase origin "$GITHUB_REF_NAME"
             git push origin HEAD:"$GITHUB_REF_NAME"
           fi
-p/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: 提交解压源码并删除 zip
-        if: success() && steps.zip.outputs.zip != ''
-        env:
-          ZIP: ${{ steps.zip.outputs.zip }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -f -- "$ZIP"
-          # 确保构
