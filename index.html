@@ -23,6 +23,17 @@
     <main class="main-content" id="main-content">
       <!-- ===== 首页 ===== -->
       <section class="page active" id="page-dashboard" aria-label="首页">
+        <article class="card warning-panel">
+          <div class="card-heading">
+            <div>
+              <h3>⚠ 到期预警</h3>
+              <p>点击条目可跳转到台账对应记录</p>
+            </div>
+            <button class="button ghost small" data-action="show-all-warnings">全部</button>
+          </div>
+          <div id="warning-list" class="warning-list"></div>
+        </article>
+
         <div class="section-heading">
           <h2 id="dashboard-heading">本月经营概览</h2>
           <p id="dashboard-month-label"></p>
@@ -72,17 +83,6 @@
             <strong class="metric-value" id="metric-monthly-signing">¥0</strong>
           </article>
         </div>
-
-        <article class="card warning-panel">
-          <div class="card-heading">
-            <div>
-              <h3>⚠ 到期预警</h3>
-              <p>点击条目可跳转到台账对应记录</p>
-            </div>
-            <button class="button ghost small" data-action="show-all-warnings">全部</button>
-          </div>
-          <div id="warning-list" class="warning-list"></div>
-        </article>
 
         <article class="card chart-card">
           <div class="card-heading">
@@ -205,14 +205,16 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/></svg>
         <span>台账</span>
       </button>
-      <button class="tab-add" data-action="add-record" aria-label="新增记录">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
       <button class="tab-item" data-action="navigate" data-page="settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z"/></svg>
         <span>设置</span>
       </button>
     </nav>
+
+    <button class="fab" data-action="add-record" aria-label="新增记录">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>新增</span>
+    </button>
   </div>
 
   <div id="modal-root"></div>

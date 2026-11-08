@@ -493,6 +493,7 @@ function renderPageChrome() {
   const meta = PAGE_META[state.activePage] || PAGE_META.dashboard;
   $('#page-title').textContent = meta.title;
   $('#page-subtitle').textContent = meta.subtitle;
+  document.body.dataset.page = state.activePage;
   $$('.tab-item[data-page]').forEach((button) => {
     button.classList.toggle('active', button.dataset.page === state.activePage);
   });
@@ -717,7 +718,7 @@ function renderLedger() {
 
   $('#ledger-list').innerHTML = pageRecords.length
     ? pageRecords.map(renderRecordCard).join('')
-    : '<div class="empty-state"><div><span class="empty-icon">⌕</span>没有符合筛选条件的记录</div></div>';
+    : '<div class="empty-state"><div><span class="empty-icon">⌕</span>没有符合筛选条件的记录，点右下角「新增」添加</div></div>';
   renderPagination(totalPages);
   renderFocusBanner();
 }

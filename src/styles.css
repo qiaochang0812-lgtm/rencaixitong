@@ -105,7 +105,7 @@ h1, h2, h3, p { margin: 0; }
   left: 0; right: 0; bottom: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: 1fr 1fr auto 1fr;
+  grid-template-columns: repeat(3, 1fr);
   align-items: center;
   height: calc(var(--tab-height) + var(--safe-bottom));
   padding: 0 8px var(--safe-bottom);
@@ -123,19 +123,28 @@ h1, h2, h3, p { margin: 0; }
   font-size: 11px;
   transition: color .15s;
 }
-.tab-item svg, .tab-add svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tab-item svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tab-item.active { color: var(--teal-700); font-weight: 600; }
-.tab-add {
-  width: 52px; height: 52px;
-  margin: -18px 10px 0;
-  display: grid; place-items: center;
-  border-radius: 50%;
+.tab-item:active { transform: scale(.94); }
+
+/* ---------- 台账页右下角悬浮“新增” ---------- */
+.fab {
+  position: absolute;
+  right: 16px;
+  bottom: calc(var(--tab-height) + var(--safe-bottom) + 16px);
+  z-index: 15;
+  display: none;
+  align-items: center; gap: 6px;
+  height: 52px; padding: 0 20px 0 16px;
+  border-radius: 26px;
   background: linear-gradient(135deg, var(--teal-600), var(--teal-700));
-  color: #fff;
+  color: #fff; font-size: 15px; font-weight: 700;
   box-shadow: 0 6px 16px rgba(13, 148, 136, .45);
 }
-.tab-add svg { width: 26px; height: 26px; stroke-width: 2.4; }
-.tab-add:active, .tab-item:active { transform: scale(.94); }
+.fab svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.fab:active { transform: scale(.95); }
+body[data-page="ledger"] .fab { display: inline-flex; }
+body[data-page="ledger"] #page-ledger { padding-bottom: 64px; }
 
 /* ---------- 按钮 ---------- */
 .button {
